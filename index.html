@@ -25,7 +25,7 @@
 
     <div class="flex-1 max-w-md px-6">
       <div class="relative group">
-        <input v-model="searchQuery" ref="searchInput" placeholder="搜索标题、内容、标签..."
+        <input v-model="searchQuery" placeholder="搜索标题、内容、标签..."
                class="w-full bg-white/5 border border-white/10 rounded-full py-2.5 px-12 text-[16px] focus:border-[#40B5AD]/40 outline-none transition-all">
         <span class="absolute left-4 top-1/2 -translate-y-1/2 opacity-20 group-focus-within:text-[#40B5AD]">🔍</span>
       </div>
@@ -37,7 +37,7 @@
       </button>
       <div v-if="auth" class="flex items-center gap-3">
         <span class="text-[10px] font-mono opacity-40 hidden lg:block uppercase">{{ auth.user.login }}</span>
-        <img :src="auth.user.avatar_url" class="w-8 h-8 rounded-full border border-white/10" @click="handleLogout" title="点击登出">
+        <img :src="auth.user.avatar_url" class="w-8 h-8 rounded-full border border-white/10 cursor-pointer" @click="handleLogout" title="点击登出">
       </div>
       <button v-else @click="handleLogin" class="text-[10px] font-black text-[#40B5AD] uppercase tracking-widest">github登录</button>
     </div>
@@ -45,9 +45,10 @@
 
   <main id="main-content" class="pt-20 h-screen overflow-y-auto" ref="scrollRoot">
     <transition name="fade" mode="out-in">
-      <section v-if="!activeArticle" class="max-w-7xl mx-auto py-12 px-6">
+
+      <section v-if="!activeArticle && !isEditing" class="max-w-7xl mx-auto py-12 px-6">
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
-          <div v-for="item in filteredList" :key="item.id" @click="loadArticle(item)" class="archive-card group">
+          <div v-for="item in filteredList" :key="item.id" @click="loadArticle(item)" class="archive-card group cursor-pointer">
             <div class="aspect-[16/9] bg-[#1a1a1a] relative overflow-hidden rounded-t-[2rem]">
               <img v-if="item.cover" :src="item.cover" class="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-transform duration-500 group-hover:scale-105">
               <div v-else class="w-full h-full flex items-center justify-center text-white/5 font-black text-6xl">WIKI</div>
@@ -69,20 +70,39 @@
 
           <div class="flex gap-4">
             <button @click="toggleEdit" class="text-[10px] font-black uppercase tracking-widest border border-white/10 px-4 py-2 rounded-lg hover:border-[#40B5AD]/50 transition-all">
-              {{ isEditing ? '取消编辑' : '编辑此文本' }}
+              {{ isEditing ? '退出编辑' : '编辑文本' }}
             </button>
             <button v-if="isEditing" @click="submitArchive" :disabled="isSubmitting"
-                    class="text-[10px] font-black uppercase tracking-widest bg-[#40B5AD] text-black px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(64,181,173,0.3)] disabled:opacity-50">
-              {{ isSubmitting ? '请稍等' : '发送至服务器' }}
+                    class="text-[10px] font-black uppercase tracking-widest bg-[#40B5AD] text-black px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(64,181,173,0.3)] disabled:opacity-50 transition-all">
+              {{ isSubmitting ? '正在打包发送...' : '提交修正/投稿' }}
             </button>
           </div>
         </div>
 
         <div v-if="isEditing" class="animate-zoom">
-          <div class="mb-4 text-[10px] font-mono text-[#40B5AD] opacity-60 uppercase">编辑模式：支持完整 Markdown & YAML 元数据</div>
-          <textarea v-model="editContent"
-                    class="w-full h-[70vh] bg-white/5 border border-white/10 rounded-2xl p-8 text-slate-300 font-mono text-sm focus:border-[#40B5AD]/40 outline-none ring-0 transition-all shadow-inner"
-                    placeholder="在此输入文本内容..."></textarea>
+          <div class="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-xl border border-white/5">
+            <div class="text-[10px] font-mono text-[#40B5AD] opacity-60 uppercase">插入本地资源 (.png, .jpg)</div>
+            <div class="flex items-center gap-4">
+              <input type="file" ref="fileInput" class="hidden" accept="image/*" @change="handleImageUpload">
+              <button @click="$refs.fileInput.click()" class="text-[10px] font-black border border-[#40B5AD]/30 px-3 py-1.5 rounded-md hover:bg-[#40B5AD]/10 text-[#40B5AD] transition-all">
+                + 上传并插入图片
+              </button>
+              <span v-if="Object.keys(localImages).length > 0" class="text-[9px] text-slate-500 font-mono">
+                PENDING: {{ Object.keys(localImages).length }} FILES
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-8">
+            <textarea v-model="editContent"
+                      class="w-full h-[50vh] bg-black/40 border border-white/10 rounded-2xl p-8 text-slate-300 font-mono text-sm focus:border-[#40B5AD]/40 outline-none transition-all shadow-inner"
+                      placeholder="在此编辑内容..."></textarea>
+
+            <div class="mt-8">
+              <div class="text-[10px] font-black opacity-20 uppercase mb-4 tracking-widest">--- Live Preview ---</div>
+              <article v-html="livePreviewContent" class="markdown-body opacity-80 pointer-events-none"></article>
+            </div>
+          </div>
         </div>
 
         <article v-else v-html="renderedContent" class="markdown-body animate-zoom pb-32"></article>
@@ -104,6 +124,7 @@
     </div>
   </div>
 </div>
-</body>
+
 <script src="js/app.js" type="module"></script>
+</body>
 </html>

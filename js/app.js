@@ -1,9 +1,9 @@
 import { PortalAuth } from './auth.js';
 
-const { createApp, ref, computed, onMounted } = window.Vue;
+const { createApp, ref, computed, onMounted, watch } = window.Vue;
 const WORKER_URL = 'https://openstsubmission.linvin.net';
 
-// --- 1. Markdown 扩展配置 ---
+// --- 1. Markdown 渲染扩展 ---
 const maskExtension = {
     name: 'mask',
     level: 'inline',
@@ -25,30 +25,56 @@ marked.setOptions({
 
 createApp({
     setup() {
-        // --- 响应式数据 ---
         const wikiList = ref([]);
         const activeArticle = ref(null);
         const renderedContent = ref('');
+        const editContent = ref('');
         const searchQuery = ref('');
         const scrollRoot = ref(null);
 
-        // Auth & 编辑器状态
-        // 初始化时获取一次状态
+        // Auth & 编辑状态
         const auth = ref(PortalAuth.get());
         const isAdmin = ref(false);
         const isEditing = ref(false);
-        const editContent = ref('');
         const isSubmitting = ref(false);
+
+        // 💡 图片处理核心仓库
+        const localImages = ref({});     // { "name.png": FileObject }
+        const imagePreviews = ref({});   // { "name.png": "blob:url" }
 
         const converterS2T = ref(null);
         const converterT2S = ref(null);
 
-        // --- 2. 核心身份验证逻辑 ---
+        // --- 逻辑：创建渲染器 ---
+        const createWikiRenderer = (baseDir) => {
+            const renderer = new marked.Renderer();
+            renderer.image = (href, title, text) => {
+                let src = href;
+                const fileName = href.split('/').pop();
+
+                // 优先检查本地缓存
+                if (imagePreviews.value[fileName]) {
+                    src = imagePreviews.value[fileName];
+                } else if (!href.startsWith('http') && !href.startsWith('blob:')) {
+                    // 补全相对路径
+                    src = `wiki_content/${baseDir}${href.replace('./', '')}`;
+                }
+                return `<div class="img-container"><img src="${src}" alt="${text||''}"><p class="img-caption">${text||''}</p></div>`;
+            };
+            return renderer;
+        };
+
+        // --- 逻辑：实时预览内容 ---
+        const livePreviewContent = computed(() => {
+            if (!isEditing.value) return '';
+            const contentOnly = editContent.value.replace(/^===\s*[\s\S]*?\s*===\s*/, '');
+            const baseDir = activeArticle.value ? activeArticle.value.baseDir : 'new-wiki/';
+            return marked.parse(contentOnly, { renderer: createWikiRenderer(baseDir) });
+        });
 
         const handleLogin = () => {
             const CLIENT_ID = 'Ov23liTildfj3XAkvbr8';
             const redirect_uri = window.location.origin + window.location.pathname;
-            // 使用 state 记录当前阅读状态，Base64 编码
             const state = activeArticle.value ? btoa(activeArticle.value.id) : '';
             window.location.href = `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&scope=repo&redirect_uri=${encodeURIComponent(redirect_uri)}&state=${state}`;
         };
@@ -63,39 +89,28 @@ createApp({
         const checkIdentity = async () => {
             const currentAuth = PortalAuth.get();
             auth.value = currentAuth;
-
             if (!currentAuth) return;
-
             try {
                 const res = await fetch(`${WORKER_URL}/api/check-admin`, {
                     headers: { 'Authorization': `Bearer ${currentAuth.token}` }
                 });
                 const data = await res.json();
                 isAdmin.value = data.isAdmin;
-            } catch (e) {
-                console.error("Admin check failed", e);
-            }
+            } catch (e) { console.error("Admin check failed", e); }
         };
 
         const handleOAuthCallback = async () => {
             const params = new URLSearchParams(window.location.search);
             const code = params.get('code');
             const state = params.get('state');
-
             if (code) {
                 try {
                     const res = await fetch(`${WORKER_URL}/api/exchange-token?code=${code}`);
                     const data = await res.json();
                     if (data.access_token) {
-                        // 存入 Auth 模块
                         await PortalAuth.save(data, true);
-                        // 清理 URL 参数
                         window.history.replaceState({}, '', window.location.pathname);
-
-                        // 💡 关键修复：登录成功后立即刷新响应式变量
                         await checkIdentity();
-
-                        // 如果有 state，恢复阅读进度
                         if (state) {
                             try {
                                 const targetId = atob(state);
@@ -108,13 +123,10 @@ createApp({
             }
         };
 
-        // --- 3. 档案馆核心逻辑 ---
-
         const initWikiData = async () => {
             try {
                 const res = await fetch('./public/wiki.json');
                 wikiList.value = await res.json();
-                // 异步加载转换器
                 if (window.OpenCC) {
                     converterS2T.value = await OpenCC.Converter({ from: 'cn', to: 'hk' });
                     converterT2S.value = await OpenCC.Converter({ from: 'hk', to: 'cn' });
@@ -127,19 +139,24 @@ createApp({
                 const res = await fetch(`./${item.mdPath}`);
                 const rawMd = await res.text();
                 editContent.value = rawMd;
-
                 const contentOnly = rawMd.replace(/^===\s*[\s\S]*?\s*===\s*/, '');
-                const renderer = new marked.Renderer();
-                renderer.image = (href, title, text) => {
-                    const src = href.startsWith('http') ? href : `wiki_content/${item.baseDir}${href}`;
-                    return `<div class="img-container"><img src="${src}" alt="${text||''}"><p class="img-caption">${text||''}</p></div>`;
-                };
-
-                renderedContent.value = marked.parse(contentOnly, { renderer });
+                renderedContent.value = marked.parse(contentOnly, { renderer: createWikiRenderer(item.baseDir) });
                 activeArticle.value = item;
                 isEditing.value = false;
                 if (scrollRoot.value) scrollRoot.value.scrollTop = 0;
             } catch (e) { console.error("Load article failed:", e); }
+        };
+
+        // 💡 图片上传处理
+        const handleImageUpload = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const vUrl = URL.createObjectURL(file);
+            localImages.value[file.name] = file;
+            imagePreviews.value[file.name] = vUrl;
+            // 自动插入 Markdown 语法
+            editContent.value += `\n\n![${file.name}](./${file.name})`;
+            e.target.value = ''; // Reset
         };
 
         const submitArchive = async () => {
@@ -148,12 +165,18 @@ createApp({
             try {
                 const zip = new JSZip();
                 const item = activeArticle.value;
-                const folderName = item ? item.baseDir.replace('/', '') : `new-wiki-${Date.now()}`;
+                const folderName = item ? item.baseDir.replace(/\//g, '') : `new-wiki-${Date.now()}`;
                 const fileName = item ? item.mdPath.split('/').pop() : 'index.md';
 
+                // 1. 压入 Markdown 内容
                 zip.file(`${folderName}/${fileName}`, editContent.value);
-                const blob = await zip.generateAsync({ type: "blob" });
 
+                // 2. 压入所有本地上传的图片
+                for (const [name, fileObj] of Object.entries(localImages.value)) {
+                    zip.file(`${folderName}/${name}`, fileObj);
+                }
+
+                const blob = await zip.generateAsync({ type: "blob" });
                 const fd = new FormData();
                 fd.append('file', blob, 'archive_update.zip');
                 fd.append('user', auth.value.user?.login || 'Explorer');
@@ -168,7 +191,11 @@ createApp({
 
                 const data = await res.json();
                 if (data.success) {
-                    alert(`✅ 提交成功！已创建 Issue #${data.issueNumber}`);
+                    alert(`✅ 提交成功！已创建 PR/Issue #${data.issueNumber}`);
+                    // 清理工作
+                    localImages.value = {};
+                    Object.values(imagePreviews.value).forEach(URL.revokeObjectURL);
+                    imagePreviews.value = {};
                     isEditing.value = false;
                 } else { throw new Error(data.error || "Submission Failed"); }
             } catch (e) {
@@ -196,11 +223,9 @@ createApp({
 
         onMounted(async () => {
             await initWikiData();
-            await handleOAuthCallback(); // 优先处理 GitHub 跳回逻辑
-            await checkIdentity();       // 检查并刷新身份状态
-
+            await handleOAuthCallback();
+            await checkIdentity();
             window.addEventListener('keydown', (e) => {
-                // 只有在非输入状态且非编辑状态下按 R 触发随机
                 if (e.key.toLowerCase() === 'r' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA' && !isEditing.value) {
                     pickRandom();
                 }
@@ -208,13 +233,18 @@ createApp({
         });
 
         return {
-            wikiList, filteredList, activeArticle, renderedContent,
-            searchQuery, scrollRoot, auth, isAdmin, isEditing, editContent, isSubmitting,
-            loadArticle,
-            backToList: () => { activeArticle.value = null; isEditing.value = false; },
-            pickRandom,
-            handleLogin,
-            handleLogout,
+            wikiList, filteredList, activeArticle, renderedContent, editContent,
+            searchQuery, scrollRoot, auth, isAdmin, isEditing, isSubmitting,
+            localImages, livePreviewContent,
+            loadArticle, handleImageUpload,
+            backToList: () => {
+                activeArticle.value = null;
+                isEditing.value = false;
+                localImages.value = {};
+                Object.values(imagePreviews.value).forEach(URL.revokeObjectURL);
+                imagePreviews.value = {};
+            },
+            pickRandom, handleLogin, handleLogout,
             toggleEdit: () => {
                 if(!auth.value) return handleLogin();
                 isEditing.value = !isEditing.value;
