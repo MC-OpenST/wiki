@@ -51,13 +51,16 @@ createApp({
             renderer.image = (href, title, text) => {
                 if (!href) return '';
                 let src = href;
+
+                // 💡 提取文件名（不管路径是 ./ 还是 ./images/，只拿最后的 mypic.png）
                 const fileName = href.split('/').pop();
 
-                // 使用 ?. 防止 imagePreviews.value 为空时崩溃
-                if (imagePreviews.value?.[fileName]) {
+                // 优先从本地预览库找
+                if (imagePreviews.value && imagePreviews.value[fileName]) {
                     src = imagePreviews.value[fileName];
                 } else if (!href.startsWith('http') && !href.startsWith('blob:')) {
                     const dir = baseDir ? baseDir.replace(/\/$/, '') + '/' : '';
+                    // 远程路径处理
                     src = `wiki_content/${dir}${href.replace('./', '')}`;
                 }
                 return `<div class="img-container"><img src="${src}" alt="${text||''}"><p class="img-caption">${text||''}</p></div>`;
@@ -148,16 +151,27 @@ createApp({
             } catch (e) { console.error("Load article failed:", e); }
         };
 
-        // 💡 图片上传处理
         const handleImageUpload = (e) => {
             const file = e.target.files[0];
             if (!file) return;
+
+            // 1. 准备资源
             const vUrl = URL.createObjectURL(file);
             localImages.value[file.name] = file;
             imagePreviews.value[file.name] = vUrl;
-            // 自动插入 Markdown 语法
-            editContent.value += `\n\n![${file.name}](./${file.name})`;
-            e.target.value = ''; // Reset
+
+            // 2. 获取文本框（使用更稳妥的方式）
+            const textarea = e.target.closest('#app').querySelector('textarea');
+            const start = textarea ? textarea.selectionStart : editContent.value.length;
+            const end = textarea ? textarea.selectionEnd : editContent.value.length;
+            const text = editContent.value;
+
+            // 3. 插入带 images/ 的路径
+            const insertText = `![${file.name}](./images/${file.name})`;
+            editContent.value = text.substring(0, start) + insertText + text.substring(end);
+
+            // 4. 重置 input
+            e.target.value = '';
         };
 
         const submitArchive = async () => {
@@ -166,15 +180,22 @@ createApp({
             try {
                 const zip = new JSZip();
                 const item = activeArticle.value;
+                // 规范文件夹命名
                 const folderName = item ? item.baseDir.replace(/\//g, '') : `new-wiki-${Date.now()}`;
                 const fileName = item ? item.mdPath.split('/').pop() : 'index.md';
 
-                // 1. 压入 Markdown 内容
-                zip.file(`${folderName}/${fileName}`, editContent.value);
+                // 创建主文件夹
+                const root = zip.folder(folderName);
 
-                // 2. 压入所有本地上传的图片
-                for (const [name, fileObj] of Object.entries(localImages.value)) {
-                    zip.file(`${folderName}/${name}`, fileObj);
+                // 1. 写入 Markdown
+                root.file(fileName, editContent.value);
+
+                // 2. 💡 创建 images 文件夹并塞入图片
+                if (Object.keys(localImages.value).length > 0) {
+                    const imgFolder = root.folder("images");
+                    for (const [name, fileObj] of Object.entries(localImages.value)) {
+                        imgFolder.file(name, fileObj);
+                    }
                 }
 
                 const blob = await zip.generateAsync({ type: "blob" });
@@ -192,8 +213,7 @@ createApp({
 
                 const data = await res.json();
                 if (data.success) {
-                    alert(`✅ 提交成功！已创建 PR/Issue #${data.issueNumber}`);
-                    // 清理工作
+                    alert(`✅ 提交成功！已创建 Issue #${data.issueNumber}，待staff审核后进行处理`);
                     localImages.value = {};
                     Object.values(imagePreviews.value).forEach(URL.revokeObjectURL);
                     imagePreviews.value = {};
