@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>OpenST Wiki</title>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-[#0c0c0c] text-slate-200 antialiased">
+<div id="app" v-cloak>
+  <header class="h-20 fixed top-0 w-full z-50 border-b border-white/5 bg-black/60 backdrop-blur-xl px-6 md:px-12 flex items-center justify-between">
+    <div class="flex items-center gap-4 cursor-pointer shrink-0" @click="backToList">
+      <div class="w-4 h-4 bg-[#40B5AD] rotate-45 shadow-[0_0_15px_#40B5AD]"></div>
+      <h1 class="font-black text-xl uppercase tracking-tighter text-white">OpenST Wiki</h1>
+    </div>
+
+    <div class="flex-1 max-w-md px-6">
+      <div class="relative group">
+        <input v-model="searchQuery" ref="searchInput" placeholder="搜索标题、内容、标签..."
+               class="w-full bg-white/5 border border-white/10 rounded-full py-2.5 px-12 text-[16px] focus:border-[#40B5AD]/40 outline-none transition-all">
+        <span class="absolute left-4 top-1/2 -translate-y-1/2 opacity-20 group-focus-within:text-[#40B5AD]">🔍</span>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-6 shrink-0">
+      <button v-if="!activeArticle" @click="toggleEdit" class="hidden md:block text-[10px] font-black border border-white/10 px-3 py-1 rounded hover:bg-white/5 uppercase tracking-widest">
+        + 新建文章
+      </button>
+      <div v-if="auth" class="flex items-center gap-3">
+        <span class="text-[10px] font-mono opacity-40 hidden lg:block uppercase">{{ auth.user.login }}</span>
+        <img :src="auth.user.avatar_url" class="w-8 h-8 rounded-full border border-white/10" @click="handleLogout" title="点击登出">
+      </div>
+      <button v-else @click="handleLogin" class="text-[10px] font-black text-[#40B5AD] uppercase tracking-widest">github登录</button>
+    </div>
+  </header>
+
+  <main id="main-content" class="pt-20 h-screen overflow-y-auto" ref="scrollRoot">
+    <transition name="fade" mode="out-in">
+      <section v-if="!activeArticle" class="max-w-7xl mx-auto py-12 px-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
+          <div v-for="item in filteredList" :key="item.id" @click="loadArticle(item)" class="archive-card group">
+            <div class="aspect-[16/9] bg-[#1a1a1a] relative overflow-hidden rounded-t-[2rem]">
+              <img v-if="item.cover" :src="item.cover" class="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-transform duration-500 group-hover:scale-105">
+              <div v-else class="w-full h-full flex items-center justify-center text-white/5 font-black text-6xl">WIKI</div>
+            </div>
+            <div class="p-8">
+              <div class="flex flex-wrap gap-2 mb-4">
+                <span v-for="tag in item.tags" class="text-[10px] font-bold px-2 py-0.5 rounded bg-[#40B5AD]/10 text-[#40B5AD] uppercase">{{ tag }}</span>
+              </div>
+              <h3 class="font-bold text-xl text-white group-hover:text-[#40B5AD] transition-colors mb-3">{{ item.title }}</h3>
+              <p class="text-base text-slate-400 line-clamp-2">{{ item.summary }}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section v-else class="max-w-4xl mx-auto py-16 px-6 relative">
+        <div class="flex justify-between items-center mb-12">
+          <button @click="backToList" class="opacity-30 hover:opacity-100 uppercase tracking-widest text-[10px] font-black transition-all">← BACK_TO_LIST</button>
+
+          <div class="flex gap-4">
+            <button @click="toggleEdit" class="text-[10px] font-black uppercase tracking-widest border border-white/10 px-4 py-2 rounded-lg hover:border-[#40B5AD]/50 transition-all">
+              {{ isEditing ? '取消编辑' : '编辑此文本' }}
+            </button>
+            <button v-if="isEditing" @click="submitArchive" :disabled="isSubmitting"
+                    class="text-[10px] font-black uppercase tracking-widest bg-[#40B5AD] text-black px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(64,181,173,0.3)] disabled:opacity-50">
+              {{ isSubmitting ? '请稍等' : '发送至服务器' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="isEditing" class="animate-zoom">
+          <div class="mb-4 text-[10px] font-mono text-[#40B5AD] opacity-60 uppercase">编辑模式：支持完整 Markdown & YAML 元数据</div>
+          <textarea v-model="editContent"
+                    class="w-full h-[70vh] bg-white/5 border border-white/10 rounded-2xl p-8 text-slate-300 font-mono text-sm focus:border-[#40B5AD]/40 outline-none ring-0 transition-all shadow-inner"
+                    placeholder="在此输入文本内容..."></textarea>
+        </div>
+
+        <article v-else v-html="renderedContent" class="markdown-body animate-zoom pb-32"></article>
+      </section>
+    </transition>
+  </main>
+
+  <div v-if="wikiList.length > 0 && !isEditing"
+       @click="pickRandom"
+       class="fixed bottom-10 right-10 z-[9999] cursor-pointer group flex items-center justify-end"
+       title="R 键随机文稿">
+    <div class="mr-4 opacity-0 group-hover:opacity-100 transition-all translate-x-4 group-hover:translate-x-0 pointer-events-none">
+            <span class="bg-[#40B5AD] text-black text-[10px] font-black px-3 py-1.5 rounded-sm uppercase tracking-widest shadow-[0_0_20px_rgba(64,181,173,0.4)]">
+                手气不错
+            </span>
+    </div>
+    <div class="w-14 h-14 bg-[#1a1d23] border-2 border-[#40B5AD]/30 rounded-full flex items-center justify-center transition-all duration-500 group-hover:scale-110 group-hover:border-[#40B5AD] group-hover:shadow-[0_0_30px_rgba(64,181,173,0.5)]">
+      <span class="text-2xl relative z-10 filter grayscale group-hover:grayscale-0 transition-all">🎲</span>
+    </div>
+  </div>
+</div>
+</body>
+<script src="js/app.js" type="module"></script>
+</html>
