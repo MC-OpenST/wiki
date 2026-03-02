@@ -2,6 +2,8 @@ import { PortalAuth } from './auth.js';
 
 const { createApp, ref, computed, onMounted, watch } = window.Vue;
 const WORKER_URL = 'https://openstsubmission.linvin.net';
+let globalImagePreviews = { value: {} };
+let globalBaseDir = '';
 
 // --- 1. Markdown 渲染扩展 ---
 const maskExtension = {
@@ -22,6 +24,62 @@ marked.setOptions({
         return hljs.highlight(code, { language }).value;
     }
 });
+
+const imageCustomExtension = {
+    name: 'imageCustom',
+    level: 'inline',
+    start(src) { return src.match(/!\[/)?.index; },
+    tokenizer(src) {
+        const match = /^!\[([\s\S]*?)\]\(([\s\S]*?)\)/.exec(src);
+        if (match) {
+            return {
+                type: 'imageCustom',
+                raw: match[0],
+                text: match[1],
+                href: match[2],
+            };
+        }
+    },
+    renderer(token) {
+        const rawHref = token.href || '';
+        const text = token.text || '';
+
+        // 1. 提取参数
+        const widMatch = rawHref.match(/wid=([^ ]+)/);
+        const heigMatch = rawHref.match(/heig=([^ ]+)/);
+
+        // 2. 清洗路径并提取文件名
+        let cleanHref = rawHref.replace(/wid=[^ ]+/g, '').replace(/heig=[^ ]+/g, '').trim();
+        const fileName = cleanHref.split('/').pop();
+
+        // 3. 构造样式
+        let styles = [];
+        if (widMatch) styles.push(`width: ${widMatch[1]}`);
+        if (heigMatch) styles.push(`height: ${heigMatch[1]}`);
+        const styleAttr = styles.length ? `style="${styles.join('; ')}"` : '';
+
+        // 4. 决定来源 (使用全局引用)
+        let src = '';
+        if (globalImagePreviews.value && globalImagePreviews.value[fileName]) {
+            src = globalImagePreviews.value[fileName];
+        } else if (!cleanHref.startsWith('http') && !cleanHref.startsWith('blob:')) {
+            const dir = globalBaseDir ? globalBaseDir.replace(/\/$/, '') + '/' : '';
+            const purePath = cleanHref.replace(/^\.\//, '');
+            src = `wiki_content/${dir}${purePath}`;
+        } else {
+            src = cleanHref;
+        }
+
+        return `
+        <div class="img-container flex flex-col items-center my-6">
+            <img src="${src}" alt="${text}" ${styleAttr} class="max-w-full rounded-lg shadow-md" onerror="console.warn('加载失败:', '${src}')">
+            ${text ? `<p class="img-caption text-xs mt-2 opacity-50 italic"># ${text}</p>` : ''}
+        </div>`;
+    }
+};
+
+// 记得注册
+marked.use({ extensions: [maskExtension, imageCustomExtension] });
 
 createApp({
     setup() {
@@ -49,48 +107,52 @@ createApp({
         const createWikiRenderer = (baseDir) => {
             const renderer = new marked.Renderer();
 
-            renderer.image = (token) => {
-                // 1. 基础参数提取与兼容处理
-                let rawHref = typeof token === 'string' ? token : (token.href || '');
-                let text = typeof token === 'object' ? token.text : '';
-                if (!rawHref || typeof rawHref !== 'string') return '';
+            // 💡 重点：直接定义 imageCustom 处理函数
+            renderer.imageCustom = (token) => {
+                let rawHref = token.href || '';
+                let text = token.text || '';
+                if (!rawHref) return '';
 
-                // 提取尺寸参数 (wid=... heig=...)
-                // 支持类似 ![alt](path.png wid=200px heig=300px)
+                // 1. 🔍 提取参数
                 const widMatch = rawHref.match(/wid=([^ ]+)/);
                 const heigMatch = rawHref.match(/heig=([^ ]+)/);
 
-                // 提取纯净路径
-                const cleanHref = rawHref.split(' ')[0];
-                let src = cleanHref;
+                // 2. 🧽 清洗路径
+                let cleanHref = rawHref.replace(/wid=[^ ]+/g, '').replace(/heig=[^ ]+/g, '').trim();
                 const fileName = cleanHref.split('/').pop();
 
-                // style 字符串
-                let imgStyles = [];
-                if (widMatch) imgStyles.push(`width: ${widMatch[1]}`);
-                if (heigMatch) imgStyles.push(`height: ${heigMatch[1]}`);
-                const styleAttr = imgStyles.length ? `style="${imgStyles.join('; ')}"` : '';
+                // 3. 构造样式
+                let styles = [];
+                if (widMatch) styles.push(`width: ${widMatch[1]}`);
+                if (heigMatch) styles.push(`height: ${heigMatch[1]}`);
+                const styleAttr = styles.length ? `style="${styles.join('; ')}"` : '';
 
+                // 4. 决定来源
+                let src = '';
                 if (imagePreviews.value && imagePreviews.value[fileName]) {
                     src = imagePreviews.value[fileName];
-                }
-                else if (!cleanHref.startsWith('http') && !cleanHref.startsWith('blob:')) {
+                } else if (!cleanHref.startsWith('http') && !cleanHref.startsWith('blob:')) {
                     const dir = baseDir ? baseDir.replace(/\/$/, '') + '/' : '';
-                    const cleanPath = cleanHref.replace(/^\.\//, '');
-                    src = `wiki_content/${dir}${cleanPath}`;
+                    const purePath = cleanHref.replace(/^\.\//, '');
+                    src = `wiki_content/${dir}${purePath}`;
+                } else {
+                    src = cleanHref;
                 }
 
-                // 返回魔改后的 HTML
                 return `
         <div class="img-container flex flex-col items-center my-6">
             <img src="${src}" 
-                 alt="${text || ''}" 
+                 alt="${text}" 
                  ${styleAttr}
-                 class="max-w-full rounded-lg shadow-sm"
-                 onerror="this.style.opacity='0.3'">
+                 class="max-w-full rounded-lg shadow-md"
+                 onerror="console.warn('图片加载失败:', '${src}')">
             ${text ? `<p class="img-caption text-xs mt-2 opacity-50 italic"># ${text}</p>` : ''}
         </div>`;
             };
+
+            // 兼容可能被识别为标准 image 的 token
+            renderer.image = (token) => renderer.imageCustom(token);
+
             return renderer;
         };
 
@@ -98,8 +160,11 @@ createApp({
         const livePreviewContent = computed(() => {
             if (!isEditing.value) return '';
             const contentOnly = editContent.value.replace(/^===\s*[\s\S]*?\s*===\s*/, '');
-            const baseDir = activeArticle.value ? activeArticle.value.baseDir : 'new-wiki/';
-            return marked.parse(contentOnly, { renderer: createWikiRenderer(baseDir) });
+
+            globalBaseDir = activeArticle.value ? activeArticle.value.baseDir : 'new-wiki/';
+            globalImagePreviews.value = imagePreviews.value; // 确保预览时也能拿到新上传的图
+
+            return marked.parse(contentOnly);
         });
 
         const fileInput = ref(null);
@@ -172,11 +237,16 @@ createApp({
 
         const loadArticle = async (item) => {
             try {
+                globalBaseDir = item.baseDir; // 💡 同步当前路径
+                globalImagePreviews.value = imagePreviews.value; // 💡 同步预览图引用
+
                 const res = await fetch(`./${item.mdPath}`);
                 const rawMd = await res.text();
                 editContent.value = rawMd;
                 const contentOnly = rawMd.replace(/^===\s*[\s\S]*?\s*===\s*/, '');
-                renderedContent.value = marked.parse(contentOnly, { renderer: createWikiRenderer(item.baseDir) });
+
+                // 此时 marked.parse 会直接调用我们定义的 extension.renderer
+                renderedContent.value = marked.parse(contentOnly);
                 activeArticle.value = item;
                 isEditing.value = false;
                 if (scrollRoot.value) scrollRoot.value.scrollTop = 0;
