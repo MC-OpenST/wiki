@@ -12,11 +12,23 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://unpkg.com/@vueuse/shared"></script>
+  <script src="https://unpkg.com/@vueuse/core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/nprogress@0.2.0/nprogress.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nprogress@0.2.0/nprogress.css">
 
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    #nprogress .bar { background: #40B5AD !important; height: 3px !important; }
+    #nprogress .peg { box-shadow: 0 0 10px #40B5AD, 0 0 5px #40B5AD !important; }
+  </style>
 </head>
 <body class="bg-[#0c0c0c] text-slate-200 antialiased">
 <div id="app" v-cloak>
+  <div class="fixed top-24 left-6 z-[100] bg-red-500 text-white p-2">
+    调试信息：当前页 {{ currentPage }} / 总页数 {{ totalPages }}
+  </div>
   <header class="h-20 fixed top-0 w-full z-50 border-b border-white/5 bg-black/60 backdrop-blur-xl px-6 md:px-12 flex items-center justify-between">
     <div class="flex items-center gap-4 cursor-pointer shrink-0" @click="backToList">
       <div class="w-4 h-4 bg-[#40B5AD] rotate-45 shadow-[0_0_15px_#40B5AD]"></div>
@@ -45,68 +57,74 @@
 
   <main id="main-content" class="pt-20 h-screen overflow-y-auto" ref="scrollRoot">
     <transition name="fade" mode="out-in">
+      <div :key="activeArticle ? 'detail' : 'list'" class="w-full">
 
-      <section v-if="!activeArticle && !isEditing" class="max-w-7xl mx-auto py-12 px-6">
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
-          <div v-for="item in filteredList" :key="item.id" @click="loadArticle(item)" class="archive-card group cursor-pointer">
-            <div class="aspect-[16/9] bg-[#1a1a1a] relative overflow-hidden rounded-t-[2rem]">
-              <img v-if="item.cover" :src="item.cover" class="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-transform duration-500 group-hover:scale-105">
-              <div v-else class="w-full h-full flex items-center justify-center text-white/5 font-black text-6xl">WIKI</div>
-            </div>
-            <div class="p-8">
-              <div class="flex flex-wrap gap-2 mb-4">
-                <span v-for="tag in item.tags" class="text-[10px] font-bold px-2 py-0.5 rounded bg-[#40B5AD]/10 text-[#40B5AD] uppercase">{{ tag }}</span>
+        <section v-if="!activeArticle && !isEditing" class="max-w-7xl mx-auto py-12 px-6">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
+            <div v-for="item in pagedList" :key="item.id" @click="loadArticle(item)" class="archive-card group cursor-pointer relative">
+              <div v-if="item.pinned" class="absolute top-4 right-4 z-10 bg-[#40B5AD] text-black text-[10px] font-black px-2 py-0.5 rounded shadow-[0_0_10px_#40B5AD]">
+                PINNED
               </div>
-              <h3 class="font-bold text-xl text-white group-hover:text-[#40B5AD] transition-colors mb-3">{{ item.title }}</h3>
-              <p class="text-base text-slate-400 line-clamp-2">{{ item.summary }}</p>
+
+              <div class="aspect-[16/9] bg-[#1a1a1a] relative overflow-hidden rounded-t-[2rem]">
+                <img v-if="item.cover" :src="item.cover" class="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-transform duration-500 group-hover:scale-105">
+                <div v-else class="w-full h-full flex items-center justify-center text-white/5 font-black text-6xl">WIKI</div>
+              </div>
+
+              <div class="p-8">
+                <div class="flex flex-wrap gap-2 mb-4">
+                  <span v-for="tag in item.tags" class="text-[10px] font-bold px-2 py-0.5 rounded bg-[#40B5AD]/10 text-[#40B5AD] uppercase">{{ tag }}</span>
+                </div>
+                <h3 class="font-bold text-xl text-white group-hover:text-[#40B5AD] transition-colors mb-3">{{ item.title }}</h3>
+                <p class="text-base text-slate-400 line-clamp-2">{{ item.summary }}</p>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section v-else class="max-w-4xl mx-auto py-16 px-6 relative">
-        <div class="flex justify-between items-center mb-12">
-          <button @click="backToList" class="opacity-30 hover:opacity-100 uppercase tracking-widest text-[10px] font-black transition-all">← BACK_TO_LIST</button>
+          <div v-if="totalPages > 1" class="flex justify-center items-center gap-8 mt-16 pb-12">
 
-          <div class="flex gap-4">
-            <button @click="toggleEdit" class="text-[10px] font-black uppercase tracking-widest border border-white/10 px-4 py-2 rounded-lg hover:border-[#40B5AD]/50 transition-all">
-              {{ isEditing ? '退出编辑' : '编辑文本' }}
+            <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1"
+                    class="flex items-center gap-2 px-4 py-2 opacity-40 hover:opacity-100 disabled:opacity-10 transition-all text-[11px] font-black uppercase tracking-widest">
+              <span class="text-lg">←</span> 上一页
             </button>
-            <button v-if="isEditing" @click="submitArchive" :disabled="isSubmitting"
-                    class="text-[10px] font-black uppercase tracking-widest bg-[#40B5AD] text-black px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(64,181,173,0.3)] disabled:opacity-50 transition-all">
-              {{ isSubmitting ? '正在打包发送...' : '提交修正/投稿' }}
+
+            <div class="flex items-center gap-3 bg-white/5 border border-white/10 px-4 py-1.5 rounded-full backdrop-blur-sm">
+              <input type="number"
+                     v-model.number="inputPage"
+                     @keyup.enter="jumpToPage"
+                     @blur="jumpToPage"
+                     class="w-10 bg-transparent border-none outline-none focus:ring-0 p-0 text-center text-[#40B5AD] font-mono font-bold appearance-none [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                     style="
+                  background-color:#181818 !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  outline: none !important;
+                  -webkit-tap-highlight-color: transparent;"> <span class="opacity-20 text-[11px] font-bold select-none">/</span>
+              <span class="opacity-40 text-[11px] font-mono font-bold select-none">{{ totalPages }}</span>
+            </div>
+
+            <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages"
+                    class="flex items-center gap-2 px-4 py-2 opacity-40 hover:opacity-100 disabled:opacity-10 transition-all text-[11px] font-black uppercase tracking-widest">
+              下一页 <span class="text-lg">→</span>
             </button>
           </div>
-        </div>
 
-        <div v-if="isEditing" class="animate-zoom">
-          <div class="flex justify-between items-center mb-4 bg-white/5 p-4 rounded-xl border border-white/5">
-            <div class="text-[10px] font-mono text-[#40B5AD] opacity-60 uppercase">插入本地资源 (.png, .jpg)</div>
-            <div class="flex items-center gap-4">
-              <input type="file" ref="fileInput" class="hidden" accept="image/*" @change="handleImageUpload">
-              <button @click="triggerFileInput" class="text-[10px] font-black border border-[#40B5AD]/30 px-3 py-1.5 rounded-md hover:bg-[#40B5AD]/10 text-[#40B5AD] transition-all">
-                + 上传并插入图片
-              </button>
-              <span v-if="localImages && Object.keys(localImages).length > 0" class="text-[9px] text-slate-500 font-mono">
-                  PENDING: {{ Object.keys(localImages).length }} FILES
-              </span>
+        </section>
+
+        <section v-else class="max-w-4xl mx-auto py-16 px-6 relative">
+          <div class="flex justify-between items-center mb-12">
+            <button @click="backToList" class="opacity-30 hover:opacity-100 uppercase tracking-widest text-[10px] font-black transition-all">← BACK_TO_LIST</button>
+            <div class="flex gap-4">
+              <button @click="toggleEdit" class="..."> {{ isEditing ? '退出编辑' : '编辑文本' }} </button>
             </div>
           </div>
 
-          <div class="grid grid-cols-1 gap-8">
-            <textarea v-model="editContent"
-                      class="w-full h-[50vh] bg-black/40 border border-white/10 rounded-2xl p-8 text-slate-300 font-mono text-sm focus:border-[#40B5AD]/40 outline-none transition-all shadow-inner"
-                      placeholder="在此编辑内容..."></textarea>
-
-            <div class="mt-8">
-              <div class="text-[10px] font-black opacity-20 uppercase mb-4 tracking-widest">--- Live Preview ---</div>
-              <article v-html="livePreviewContent" class="markdown-body opacity-80 pointer-events-none"></article>
-            </div>
+          <div v-if="isEditing">
           </div>
-        </div>
+          <article v-else v-html="renderedContent" class="markdown-body animate-zoom pb-32"></article>
+        </section>
 
-        <article v-else v-html="renderedContent" class="markdown-body animate-zoom pb-32"></article>
-      </section>
+      </div>
     </transition>
   </main>
 
@@ -124,6 +142,8 @@
     </div>
   </div>
 </div>
+
+
 
 <script src="js/app.js" type="module"></script>
 </body>

@@ -327,3 +327,29 @@ input:focus {
     display: block;
     overflow-x: auto;
 }
+/* 移除输入框的所有默认外框和背景 */
+.page-jump-input {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(64, 181, 173, 0.2); /* 只有一条很淡的底线 */
+    outline: none;
+    transition: all 0.3s ease;
+    padding: 0;
+    margin: 0;
+}
+
+/* 聚焦时底线变亮，并去掉浏览器自带的蓝框 */
+.page-jump-input:focus {
+    border-bottom-color: #40B5AD;
+    box-shadow: 0 4px 12px -4px rgba(64, 181, 173, 0.3);
+    outline: none;
+}
+
+/* 隐藏 Chrome/Safari 等浏览器自带的上下调节小箭头 */
+.page-jump-input::-webkit-inner-spin-button,
+.page-jump-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}

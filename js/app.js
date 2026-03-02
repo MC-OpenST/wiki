@@ -130,6 +130,8 @@ createApp({
         const editContent = ref('');
         const searchQuery = ref('');
         const scrollRoot = ref(null);
+        const currentPage = ref(1);
+        const pageSize = ref(9);
 
         // Auth & 编辑状态
         const auth = ref(PortalAuth.get());
@@ -277,6 +279,7 @@ createApp({
         };
 
         const loadArticle = async (item) => {
+            window.NProgress?.start();
             try {
                 globalBaseDir = item.baseDir; // 💡 同步当前路径
                 globalImagePreviews.value = imagePreviews.value; // 💡 同步预览图引用
@@ -291,7 +294,10 @@ createApp({
                 activeArticle.value = item;
                 isEditing.value = false;
                 if (scrollRoot.value) scrollRoot.value.scrollTop = 0;
-            } catch (e) { console.error("Load article failed:", e); }
+            } catch (e) { console.error("Load article failed:", e);
+            } finally {
+                window.NProgress?.done();
+            }
         };
 
         const handleImageUpload = (e) => {
@@ -370,20 +376,41 @@ createApp({
         };
 
         const filteredList = computed(() => {
-            const q = searchQuery.value.trim().toLowerCase();
-            if (!q) return wikiList.value;
-            const qS = converterT2S.value ? converterT2S.value(q) : q;
-            const qT = converterS2T.value ? converterS2T.value(q) : q;
-            return wikiList.value.filter(i => {
-                const pool = `${i.title} ${i.summary} ${(i.tags || []).join(' ')} ${i.searchText || ''}`.toLowerCase();
-                return pool.includes(q) || pool.includes(qS) || pool.includes(qT);
+            // 搜索过滤
+            let list = wikiList.value.filter(i => {
+                const q = searchQuery.value.trim().toLowerCase();
+                if (!q) return true;
+                const pool = `${i.title} ${i.summary} ${(i.tags || []).join(' ')}`.toLowerCase();
+                return pool.includes(q);
             });
+
+            // 置顶排序
+            list.sort((a, b) => {
+                if (a.pinned && !b.pinned) return -1;
+                if (!a.pinned && b.pinned) return 1;
+                return 0;
+            });
+
+            return list;
         });
 
         const pickRandom = () => {
             if (!wikiList.value.length) return;
             loadArticle(wikiList.value[Math.floor(Math.random() * wikiList.value.length)]);
         };
+        const pagedList = computed(() => {
+            const start = (currentPage.value - 1) * pageSize.value;
+            const end = start + pageSize.value;
+            return filteredList.value.slice(start, end);
+        });
+        // 总页数计算
+        const totalPages = computed(() => {
+            const total = filteredList.value.length;
+            return Math.ceil(total / pageSize.value);
+        });
+
+        // 搜索时重置页码
+        watch(searchQuery, () => { currentPage.value = 1; });
 
         onMounted(async () => {
             await initWikiData();
@@ -395,6 +422,37 @@ createApp({
                 }
             });
         });
+        const changePage = (p) => {
+            if (p < 1 || p > totalPages.value) return;
+            currentPage.value = p;
+
+            // 💡 让滚动条丝滑地滚回顶部
+            const main = document.getElementById('main-content');
+            if (main) {
+                main.scrollTo({
+                    top: 0,
+                    behavior: 'smooth' // 这种平滑滚动非常有高级感
+                });
+            }
+        };
+        const inputPage = ref(1);
+
+        // 监听当前页码，当页码改变时同步输入框的值
+        watch(currentPage, (val) => {
+            inputPage.value = val;
+        });
+
+        const jumpToPage = () => {
+            let p = parseInt(inputPage.value);
+            if (isNaN(p)) {
+                inputPage.value = currentPage.value;
+                return;
+            }
+            if (p < 1) p = 1;
+            if (p > totalPages.value) p = totalPages.value;
+
+            changePage(p);
+        };
 
         return {
             wikiList, filteredList, activeArticle, renderedContent, editContent,
@@ -415,6 +473,13 @@ createApp({
             },
             submitArchive,
             triggerFileInput,
+            currentPage,
+            pageSize,
+            totalPages,
+            pagedList,
+            changePage,
+            jumpToPage,
+            inputPage,
         };
     }
 }).mount('#app');
