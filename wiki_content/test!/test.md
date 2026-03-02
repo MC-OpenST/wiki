@@ -40,3 +40,7 @@ def get_user_path(name):
 ~~123~~
 
 !!123!!
+
+![](images/image.png)
+
+![image.png](./image.png)

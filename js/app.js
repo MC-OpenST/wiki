@@ -48,22 +48,29 @@ createApp({
         // --- 逻辑：创建渲染器 ---
         const createWikiRenderer = (baseDir) => {
             const renderer = new marked.Renderer();
-            renderer.image = (href, title, text) => {
-                if (!href) return '';
+
+            // 这里的 href 增加类型保护
+            renderer.image = (token) => {
+                // 兼容性处理：
+                let href = typeof token === 'string' ? token : (token.href || '');
+                let text = typeof token === 'object' ? token.text : '';
+                if (!href || typeof href !== 'string') return '';
                 let src = href;
-
-                // 💡 提取文件名（不管路径是 ./ 还是 ./images/，只拿最后的 mypic.png）
                 const fileName = href.split('/').pop();
-
-                // 优先从本地预览库找
                 if (imagePreviews.value && imagePreviews.value[fileName]) {
                     src = imagePreviews.value[fileName];
-                } else if (!href.startsWith('http') && !href.startsWith('blob:')) {
-                    const dir = baseDir ? baseDir.replace(/\/$/, '') + '/' : '';
-                    // 远程路径处理
-                    src = `wiki_content/${dir}${href.replace('./', '')}`;
                 }
-                return `<div class="img-container"><img src="${src}" alt="${text||''}"><p class="img-caption">${text||''}</p></div>`;
+                else if (!href.startsWith('http') && !href.startsWith('blob:')) {
+                    const dir = baseDir ? baseDir.replace(/\/$/, '') + '/' : '';
+                    // 移除可能存在的 ./
+                    const cleanPath = href.replace(/^\.\//, '');
+                    src = `wiki_content/${dir}${cleanPath}`;
+                }
+
+                return `<div class="img-container">
+                    <img src="${src}" alt="${text || ''}" onerror="this.style.display='none'">
+                    <p class="img-caption">${text || ''}</p>
+                </div>`;
             };
             return renderer;
         };
@@ -75,6 +82,12 @@ createApp({
             const baseDir = activeArticle.value ? activeArticle.value.baseDir : 'new-wiki/';
             return marked.parse(contentOnly, { renderer: createWikiRenderer(baseDir) });
         });
+
+        const fileInput = ref(null);
+        const triggerFileInput = () => {
+            const el = document.querySelector('input[type="file"]');
+            if (el) el.click();
+        };
 
         const handleLogin = () => {
             const CLIENT_ID = 'Ov23liTildfj3XAkvbr8';
@@ -270,7 +283,8 @@ createApp({
                 if(!auth.value) return handleLogin();
                 isEditing.value = !isEditing.value;
             },
-            submitArchive
+            submitArchive,
+            triggerFileInput,
         };
     }
 }).mount('#app');
