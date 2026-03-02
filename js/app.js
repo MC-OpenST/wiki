@@ -49,28 +49,47 @@ createApp({
         const createWikiRenderer = (baseDir) => {
             const renderer = new marked.Renderer();
 
-            // 这里的 href 增加类型保护
             renderer.image = (token) => {
-                // 兼容性处理：
-                let href = typeof token === 'string' ? token : (token.href || '');
+                // 1. 基础参数提取与兼容处理
+                let rawHref = typeof token === 'string' ? token : (token.href || '');
                 let text = typeof token === 'object' ? token.text : '';
-                if (!href || typeof href !== 'string') return '';
-                let src = href;
-                const fileName = href.split('/').pop();
+                if (!rawHref || typeof rawHref !== 'string') return '';
+
+                // 提取尺寸参数 (wid=... heig=...)
+                // 支持类似 ![alt](path.png wid=200px heig=300px)
+                const widMatch = rawHref.match(/wid=([^ ]+)/);
+                const heigMatch = rawHref.match(/heig=([^ ]+)/);
+
+                // 提取纯净路径
+                const cleanHref = rawHref.split(' ')[0];
+                let src = cleanHref;
+                const fileName = cleanHref.split('/').pop();
+
+                // style 字符串
+                let imgStyles = [];
+                if (widMatch) imgStyles.push(`width: ${widMatch[1]}`);
+                if (heigMatch) imgStyles.push(`height: ${heigMatch[1]}`);
+                const styleAttr = imgStyles.length ? `style="${imgStyles.join('; ')}"` : '';
+
                 if (imagePreviews.value && imagePreviews.value[fileName]) {
                     src = imagePreviews.value[fileName];
                 }
-                else if (!href.startsWith('http') && !href.startsWith('blob:')) {
+                else if (!cleanHref.startsWith('http') && !cleanHref.startsWith('blob:')) {
                     const dir = baseDir ? baseDir.replace(/\/$/, '') + '/' : '';
-                    // 移除可能存在的 ./
-                    const cleanPath = href.replace(/^\.\//, '');
+                    const cleanPath = cleanHref.replace(/^\.\//, '');
                     src = `wiki_content/${dir}${cleanPath}`;
                 }
 
-                return `<div class="img-container">
-                    <img src="${src}" alt="${text || ''}" onerror="this.style.display='none'">
-                    <p class="img-caption">${text || ''}</p>
-                </div>`;
+                // 返回魔改后的 HTML
+                return `
+        <div class="img-container flex flex-col items-center my-6">
+            <img src="${src}" 
+                 alt="${text || ''}" 
+                 ${styleAttr}
+                 class="max-w-full rounded-lg shadow-sm"
+                 onerror="this.style.opacity='0.3'">
+            ${text ? `<p class="img-caption text-xs mt-2 opacity-50 italic"># ${text}</p>` : ''}
+        </div>`;
             };
             return renderer;
         };
