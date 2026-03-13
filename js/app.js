@@ -323,7 +323,7 @@ createApp({
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert(`✅ 提交成功！\n已创建 Issue #${data.issueNumber}\n请等待 Staff 审核处理。`);
+                    alert(`✅ 提交成功！\n已创建 Issue #${data.issueNumber}\n请等待审核处理。`);
                     isEditing.value = false;
                     localImages.value = {};
                     Object.values(imagePreviews.value).forEach(URL.revokeObjectURL);
